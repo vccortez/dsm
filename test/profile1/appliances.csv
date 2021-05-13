@@ -1,0 +1,40 @@
+id,type,label,description
+
+01,light2,"Lighting 1","Bathroom"
+02,waterheater,"Water heater","Bathroom"
+03,shaver,"Electric shaver","Bathroom"
+
+10,light1,"Lighting 2a","Bedroom"
+11,light2,"Lighting 2b","Bedroom"
+12,ceilingfan,"Ceiling fan 1","Bedroom"
+13,airconditioner,"Air conditioner 1","Bedroom"
+14,laptop,"Laptop","Bedroom"
+15,tv,"Smart TV 1","Bedroom"
+16,videogame,"Video Game","Bedroom"
+
+20,light1,"Lighting 3a","Hallway"
+21,light2,"Lighting 3b","Hallway"
+22,phone,"Phone recharge","Hallway"
+
+31,light1,"Lighting 4","Laundry room"
+32,washer,"Washing machine","Laundry room"
+33,dryer,"Clothes dryer","Laundry room"
+34,iron,"Iron","Laundry room"
+
+40,light1,"Lighting 5a","Kitchen"
+41,light2,"Lighting 5b","Kitchen"
+42,fridge,"Refrigerator","Kitchen"
+43,stove,"Electric stove","Kitchen"
+44,dishwasher,"Dish washer","Kitchen"
+45,blender,"Food blender","Kitchen"
+46,kettle,"Electric kettle","Kitchen"
+47,microwave,"Microwave","Kitchen"
+
+50,light1,"Lighting 6a","Living room"
+51,light2,"Lighting 6b","Living room"
+52,ceilingfan,"Ceiling fan 2","Living room"
+53,airconditioner,"Air conditioner 2","Living room"
+54,tv,"Smart TV 2","Living room"
+55,soundsystem,"Sound system","Living room"
+56,modem,"Modem","Living room"
+57,router,"Router","Living room"

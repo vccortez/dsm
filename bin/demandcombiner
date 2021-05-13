@@ -1,0 +1,77 @@
+#!/usr/bin/env python -u
+
+from __future__ import absolute_import
+import os, sys
+
+src_path = os.path.abspath(os.path.join('./src/'))
+if src_path not in sys.path:
+  sys.path.append(src_path)
+
+import argparse as ap
+import pathlib as pl
+import datetime as dt
+import numpy as np
+import pandas as pd
+
+import ga, pso
+
+p = ap.ArgumentParser(description='load scheduler')
+p.add_argument(
+    '-d', '--demand-files', nargs='+', help='path to demand profiles'
+)
+p.add_argument(
+    '-o', '--objective-files', nargs='+', help='path to objective values'
+)
+p.add_argument('-p', '--pop-size', type=int, default=50)
+p.add_argument('-i', '--max-iter', type=int, default=None)
+p.add_argument('-a', '--algorithm-name', choices=['ga', 'pso'], default='ga')
+p.add_argument('--output', default='output/')
+p.add_argument('--run-name', default=None)
+p.add_argument('-v', '--verbose', action='store_true')
+
+args = p.parse_args()
+
+args.objective_files = sorted(args.objective_files)
+args.demand_files = sorted(args.demand_files)
+
+dfs = []
+for i, obj_file in enumerate(args.objective_files):
+  df_obj = pd.read_csv(obj_file, index_col='index')
+  df_obj.rename(columns={'cost': 'f1', 'discomfort': 'f2'}, inplace=True)
+  df_dmd = pd.read_csv(args.demand_files[i], index_col='index')
+  df = df_obj.join(df_dmd)
+  dfs.append(df)
+
+objs_dfs = [df[['f1', 'f2']].copy() for df in dfs]
+objs = np.array([x.to_numpy() for x in objs_dfs], dtype=np.object)
+
+load_dfs = [df[[str(i) for i in range(24)]].copy() for df in dfs]
+loads = np.array([x.to_numpy() for x in load_dfs], dtype=np.object)
+
+algorithm = pso if args.algorithm_name == 'pso' else ga
+
+demands = loads[:]
+
+r, s = algorithm.run(
+    demands,
+    pop_size=args.pop_size,
+    verbose=args.verbose,
+    termination=('n_gen', args.max_iter) if args.max_iter is not None else None
+)
+
+if r.opt is None:
+  sys.exit()
+
+if args.run_name is None:
+  et = dt.datetime.fromtimestamp(r.end_time)
+  args.run_name = et.strftime('%Y-%m-%d_%H:%M:%S')
+
+out_folder = pl.Path(args.output)
+out_folder = out_folder.joinpath(pl.Path(args.run_name))
+out_folder.mkdir(parents=True, exist_ok=True)
+
+if not out_folder:
+  sys.exit()
+
+for k, df in s.items():
+  df.to_csv(out_folder / f'{k}.csv', index_label='index')

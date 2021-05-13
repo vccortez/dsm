@@ -1,0 +1,113 @@
+#!/usr/bin/env python -u
+
+from __future__ import absolute_import
+import os, sys
+
+src_path = os.path.abspath(os.path.join('./src/'))
+if src_path not in sys.path:
+  sys.path.append(src_path)
+
+import argparse as ap
+import pathlib as pl
+import datetime as dt
+import numpy as np
+import pandas as pd
+
+import nsga2_int as nsga2
+import objectives as of
+
+p = ap.ArgumentParser(description='load scheduler')
+p.add_argument('--appliances', default='test/profile1/appliances.csv')
+p.add_argument('--devices', default=None)
+p.add_argument('--generation', default='test/profile1/gen-no.csv')
+p.add_argument('--preferences', default='test/profile1/preferences.csv')
+p.add_argument('--storage', default='test/profile1/sto-no.csv')
+p.add_argument('--tariffs', default='test/profile1/tariffs.csv')
+p.add_argument('--sale', default=None)
+p.add_argument('--output', default='output/')
+p.add_argument('--name', default=None)
+p.add_argument('--population', type=int, default=50)
+p.add_argument('--evaluations', type=int, default=None)
+p.add_argument('--seed', type=int, default=None)
+p.add_argument('--sampling-seed', type=int, default=None)
+p.add_argument(
+    '-v', '--verbose', help='increase verbosity', action='store_true'
+)
+
+args = p.parse_args()
+
+if args.appliances == p.get_default('appliances') and args.devices is None:
+  args.devices = 'test/profile1/devices.csv'
+
+appliances = pd.read_csv(args.appliances)
+
+if args.devices:
+  devices = pd.read_csv(args.devices, index_col='id')
+  types = appliances['type'].to_numpy()
+  appliances['power'] = devices.loc[types]['power'].to_numpy()
+
+preferences = pd.read_csv(
+    args.preferences, dtype={
+        'def': np.bool,
+        'int': np.bool
+    }
+)
+generation = pd.read_csv(args.generation)
+storage = pd.read_csv(args.storage)
+tariffs = pd.read_csv(args.tariffs)
+
+sale = args.sale
+if type(sale) is str:
+  try:
+    sale = float(sale)
+  except:
+    sale = pd.read_csv(sale)
+
+r, s = nsga2.run(
+    appliances=appliances,
+    preferences=preferences,
+    storage=storage,
+    generation=generation,
+    tariffs=tariffs,
+    sale=sale,
+    save_history=True,
+    objs=[of.cost, of.discomfort],
+    population=args.population,
+    termination=args.evaluations,
+    sampling=('int_random',),
+    seed=args.seed,
+    sampling_seed=args.sampling_seed,
+    verbose=args.verbose,
+)
+
+if r.opt is None:
+  sys.exit()
+
+if args.name is None:
+  et = dt.datetime.fromtimestamp(r.end_time)
+  args.name = et.strftime('%Y-%m-%d_%H:%M:%S')
+
+out_folder = pl.Path(args.output)
+out_folder = out_folder.joinpath(pl.Path(args.name))
+out_folder.mkdir(parents=True, exist_ok=True)
+
+if not out_folder:
+  sys.exit()
+
+s['solution'].to_csv(out_folder / 'solutions.csv', index_label='index')
+s['ideal'].to_csv(out_folder / 'gbest.csv', index_label='index')
+s['execution'].to_csv(out_folder / 'execution.csv', index_label='index')
+
+pd.DataFrame([r.problem.tau, r.problem.tau0]).to_csv(out_folder / 'tariffs.csv', index_label='index')
+
+I = s['solution'].index.size
+for i in range(I):
+  for k in ['schedule', 'demand']:
+    for j in ['x', 'r', 's', 'm']:
+      folder = out_folder / k / j
+      folder.mkdir(parents=True, exist_ok=True)
+      s[k][j][i].to_csv(folder / f'{i}.csv', index_label='index')
+
+for k, v in s['profile'].items():
+  df = pd.DataFrame(v, columns=[i for i in range(v.shape[1])])
+  df.to_csv(out_folder / f'profile-{k}.csv', index_label='index')
