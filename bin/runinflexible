@@ -1,0 +1,198 @@
+#!/usr/bin/env python -u
+
+from __future__ import absolute_import
+import os, sys, math
+
+src_path = os.path.abspath(os.path.join('./src/'))
+if src_path not in sys.path:
+  sys.path.append(src_path)
+
+import argparse as ap
+import pathlib as pl
+import datetime as dt
+import numpy as np
+import pandas as pd
+from topsis import topsis
+
+import ga, pso
+
+# random number generator
+rng = np.random.default_rng()
+
+# cli
+p = ap.ArgumentParser(description='inflexible consumers experiment')
+
+p.add_argument(
+    '-d', '--dmd-files', nargs='+', help='path to demand profile files'
+)
+p.add_argument(
+    '-o', '--obj-files', nargs='+', help='path to objective function files'
+)
+
+p.add_argument(
+    '-r',
+    '--num-runs',
+    type=int,
+    default=1,
+    help='amount of times to repeat sampling'
+)
+p.add_argument(
+    '-i',
+    '--fra-infl',
+    type=float,
+    default=0.5,
+    help='inflexible fraction of the population'
+)
+
+p.add_argument('-p', '--pop-size', type=int, default=50)
+p.add_argument('-g', '--max-iter', type=int, default=None)
+p.add_argument(
+    '-alternatives', '--algorithm', choices=['ga', 'pso'], default='ga'
+)
+p.add_argument('--output', default='samples/')
+p.add_argument('--run-name', default=None)
+p.add_argument('-v', '--verbose', action='store_true')
+
+args = p.parse_args()
+
+args.obj_files = sorted(args.obj_files)
+args.dmd_files = sorted(args.dmd_files)
+
+assert len(args.obj_files) == len(args.dmd_files)
+
+num_consumers = len(args.dmd_files)
+num_inflexible = math.floor(num_consumers * args.fra_infl)
+
+print(f'> number of consumers: {num_consumers}')
+print(f'> number of inflexible: {num_inflexible}')
+
+# pairing data to check for index mismatches
+paired_data = []
+for i in range(num_consumers):
+  objs = pd.read_csv(args.obj_files[i], index_col='index')
+  dmds = pd.read_csv(args.dmd_files[i], index_col='index')
+  # combined data of the i-th consumer
+  df = objs.join(dmds)
+  paired_data.append(df)
+
+# cloning objective values as an object
+objs = np.empty(num_consumers, object)
+objs_dfs = [df[['cost', 'discomfort']].copy() for df in paired_data]
+objs[:] = [x.to_numpy() for x in objs_dfs]
+
+# cloning demand profiles as an object
+loads = np.empty(num_consumers, object)
+load_dfs = [df[[str(i) for i in range(24)]].copy() for df in paired_data]
+loads[:] = [x.to_numpy() for x in load_dfs]
+
+num_samples = math.floor(args.num_runs)
+print(f'> number of samples: {num_samples}')
+
+if args.run_name is None:
+  now = dt.datetime.now()
+  args.run_name = f"C{num_consumers}-I{num_inflexible}-S{num_samples}_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
+
+out_folder = pl.Path(args.output)
+out_folder = out_folder.joinpath(pl.Path(args.run_name))
+out_folder.mkdir(parents=True, exist_ok=True)
+
+# samples generation
+samples = np.array(
+    [
+        rng.choice(
+            [i for i in range(num_consumers)], num_inflexible, replace=False
+        ) for _ in range(num_samples)
+    ]
+)
+
+samples_df = pd.DataFrame(samples)
+samples_df.to_csv(out_folder / 'samples.csv', index_label='index')
+
+# beta distributions
+dist_left = rng.beta(2, 15, (num_samples, num_inflexible))
+dist_center = rng.beta(30, 30, (num_samples, num_inflexible))
+dist_right = rng.beta(15, 2, (num_samples, num_inflexible))
+dists = [dist_left, dist_center, dist_right]
+
+pd.DataFrame(dist_left).to_csv(
+    out_folder / 'dist-left.csv', index_label='index'
+)
+pd.DataFrame(dist_center).to_csv(
+    out_folder / 'dist-center.csv', index_label='index'
+)
+pd.DataFrame(dist_right).to_csv(
+    out_folder / 'dist-right.csv', index_label='index'
+)
+
+# second stage optimization
+I = [0, 0]
+algorithm = pso if args.algorithm == 'pso' else ga
+
+par_per_sample_left = []
+par_per_sample_center = []
+par_per_sample_right = []
+par_per_sample = [
+    par_per_sample_left, par_per_sample_center, par_per_sample_right
+]
+
+for i in range(num_samples):
+  best_alts_left = []
+  best_alts_center = []
+  best_alts_right = []
+  best_alts = [best_alts_left, best_alts_center, best_alts_right]
+
+  for j in range(num_inflexible):
+    idx_consumer = samples[i, j]
+    alternatives = objs[idx_consumer]
+
+    for k in range(len(dists)):
+      cutoff = dists[k][i, j]
+
+      weights = [1 - cutoff, cutoff]
+      decision = topsis(alternatives, weights, I)
+      decision.calc()
+
+      best_alts[k].append(decision.optimum_choice)
+
+  sample_folder = out_folder / f'sample-{i}'
+  sample_folder.mkdir(parents=True, exist_ok=True)
+
+  pd.DataFrame(
+      {
+          'left': best_alts_left,
+          'center': best_alts_center,
+          'right': best_alts_right
+      }
+  ).to_csv(sample_folder / 'best_alts.csv', index_label='index')
+
+  for j in range(len(dists)):
+    new_input = loads.copy()
+
+    for k in range(num_inflexible):
+      idx_consumer = samples[i, k]
+      idx_solution = best_alts[j][k]
+
+      solution = new_input[idx_consumer][idx_solution]
+      new_input[idx_consumer] = solution[None, :]
+
+    # new input completely updated
+    result, data = algorithm.run(
+        new_input,
+        pop_size=args.pop_size,
+        verbose=args.verbose,
+        termination=('n_gen',
+                     args.max_iter) if args.max_iter is not None else None
+    )
+
+    par_per_sample[j].append(result.F[0])
+
+    for k, df in data.items():
+      df.to_csv(sample_folder / f'{k}-{j}.csv', index_label='index')
+
+pd.DataFrame(
+    {
+        'left': par_per_sample_left,
+        'center': par_per_sample_center,
+        'right': par_per_sample_right
+    }
+).to_csv(out_folder / 'par_per_sample.csv', index_label='index')
